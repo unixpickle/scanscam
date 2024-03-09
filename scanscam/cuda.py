@@ -15,3 +15,12 @@ def simple_linear_scan_forward(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor
     out = torch.empty_like(x)
     scanscam_cuda.simple_linear_scan(x, y, out)
     return out
+
+
+@preprocess_scan_args
+def coalesced_linear_scan_forward(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    x = x.contiguous()
+    y = y.contiguous()
+    out = torch.empty_like(x)
+    scanscam_cuda.coalesced_linear_scan(x, y, out)
+    return out
