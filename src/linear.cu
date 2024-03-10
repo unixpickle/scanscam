@@ -180,6 +180,71 @@ __global__ void __launch_bounds__(blockSize, 1) blocked_linear_scan_kernel(
     }
 }
 
+template <typename scalar_t, typename vec_t, uint blockSize>
+__global__ void __launch_bounds__(blockSize, 1) vectorized_blocked_linear_scan_kernel(
+    const vec_t *gate,
+    const vec_t *value,
+    vec_t *output,
+    uint innerSize)
+{
+    __shared__ scalar_t sharedValues[blockSize];
+    __shared__ scalar_t sharedAccs[blockSize];
+
+    for (uint i = 0; i < innerSize; i += blockSize) {
+        const uint innerIndex = i + threadIdx.x;
+        vec_t loadedGate, loadedValue;
+        if (innerIndex < innerSize) {
+            loadedGate = gate[blockIdx.x * innerSize + innerIndex];
+            loadedValue = value[blockIdx.x * innerSize + innerIndex];
+        }
+        if (i > 0) {
+            __syncthreads(); // Finish writing from last loop iteration
+            if (threadIdx.x == 0) {
+                loadedValue.x += sharedValues[blockSize - 1] * loadedGate.x;
+            }
+            __syncthreads(); // Prevent writing until value is read
+        }
+
+        loadedValue.y += loadedValue.x * loadedGate.y;
+        loadedValue.z += loadedValue.y * loadedGate.z;
+        loadedValue.w += loadedValue.z * loadedGate.w;
+
+        vec_t totalValue = loadedValue;
+        vec_t totalAcc = loadedGate;
+        totalAcc.y *= totalAcc.x;
+        totalAcc.z *= totalAcc.y;
+        totalAcc.w *= totalAcc.z;
+
+        sharedValues[threadIdx.x] = totalValue.w;
+        sharedAccs[threadIdx.x] = totalAcc.w;
+
+        for (uint offset = 1; offset < blockSize; offset *= 2) {
+            __syncthreads();
+            scalar_t prevValue = 0;
+            scalar_t prevAcc = 1;
+            if (offset <= threadIdx.x) {
+                prevValue = sharedValues[threadIdx.x - offset];
+                prevAcc = sharedAccs[threadIdx.x - offset];
+            }
+            __syncthreads();
+            totalValue.x += totalAcc.x * prevValue;
+            totalValue.y += totalAcc.y * prevValue;
+            totalValue.z += totalAcc.z * prevValue;
+            totalValue.w += totalAcc.w * prevValue;
+            totalAcc.x *= prevAcc;
+            totalAcc.y *= prevAcc;
+            totalAcc.z *= prevAcc;
+            totalAcc.w *= prevAcc;
+            sharedValues[threadIdx.x] = totalValue.w;
+            sharedAccs[threadIdx.x] = totalAcc.w;
+        }
+
+        if (innerIndex < innerSize) {
+            output[blockIdx.x * innerSize + innerIndex] = totalValue;
+        }
+    }
+}
+
 void blocked_linear_scan(
     torch::Tensor gate,
     torch::Tensor value,
@@ -190,6 +255,20 @@ void blocked_linear_scan(
     CHECK_INPUT(output);
     assert(gate.sizes() == value.sizes());
     assert(gate.sizes() == output.sizes());
+
+    if (gate.scalar_type() == torch::ScalarType::Float &&
+        gate.size(1) >= 4096 &&
+        gate.size(1) % 4 == 0 &&
+        ((long)gate.data_ptr()) % 16 == 0) {
+        const dim3 threads(1024, 1, 1);
+        const dim3 blocks(gate.size(0), 1, 1);
+        vectorized_blocked_linear_scan_kernel<float, float4, 1024><<<blocks, threads>>>(
+            (const float4 *)gate.data_ptr(),
+            (const float4 *)value.data_ptr(),
+            (float4 *)output.data_ptr(),
+            gate.size(1) / 4);
+        return;
+    }
 
 #define BLOCKED_LINEAR_SCAN_WITH_SIZE(blockSize)                                     \
     const dim3 threads(blockSize, 1, 1);                                             \

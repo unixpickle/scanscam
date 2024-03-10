@@ -61,6 +61,11 @@ def test_coalesced_linear_scan_forward(shape: Sequence[int], permute: bool):
         (32, 1025),
         (1, 1025),
         (32, 4095),
+        (32, 4096),
+        (32, 4097),
+        (32, 4100),
+        (32, 16384),
+        (32, 16388),
     ],
 )
 def test_blocked_linear_scan_forward(shape: Sequence[int]):
