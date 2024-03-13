@@ -13,7 +13,7 @@ __global__ void __launch_bounds__(64, 1) simple_linear_scan_kernel(
     torch::PackedTensorAccessor32<scalar_t, 2> output)
 {
     const uint outerIndex = blockIdx.x * 64 + threadIdx.x;
-    if (outerIndex <= gate.size(0)) {
+    if (outerIndex < gate.size(0)) {
         scalar_t acc = 0.0;
         for (uint i = 0; i < gate.size(1); i++) {
             acc *= gate[outerIndex][i];
@@ -294,9 +294,67 @@ void blocked_linear_scan(
     }
 }
 
+template <typename scalar_t>
+__global__ void __launch_bounds__(64, 1) simple_linear_scan_backward_kernel(
+    const torch::PackedTensorAccessor32<scalar_t, 2> gate,
+    const torch::PackedTensorAccessor32<scalar_t, 2> output,
+    const torch::PackedTensorAccessor32<scalar_t, 2> outGrad,
+    torch::PackedTensorAccessor32<scalar_t, 2> gateGradOut,
+    torch::PackedTensorAccessor32<scalar_t, 2> valueGradOut)
+{
+    const uint outerIndex = blockIdx.x * 64 + threadIdx.x;
+    if (outerIndex < gate.size(0)) {
+        scalar_t doutput = 0.0;
+        for (uint i = gate.size(1); i > 0; i--) {
+            uint j = i - 1;
+            scalar_t prevOutput = 0.0;
+            if (j > 0) {
+                prevOutput = output[outerIndex][j - 1];
+            }
+            doutput += outGrad[outerIndex][j];
+            valueGradOut[outerIndex][j] = doutput;
+            gateGradOut[outerIndex][j] = prevOutput * doutput;
+            doutput *= gate[outerIndex][j];
+        }
+    }
+}
+
+void simple_linear_scan_backward(
+    torch::Tensor gate,
+    torch::Tensor output,
+    torch::Tensor outGrad,
+    // Writable output tensors:
+    torch::Tensor gateGradOut,
+    torch::Tensor valueGradOut)
+{
+    CHECK_INPUT(gate);
+    CHECK_INPUT(output);
+    CHECK_INPUT(outGrad);
+    CHECK_INPUT(gateGradOut);
+    CHECK_INPUT(valueGradOut);
+    assert(gate.sizes() == output.sizes());
+    assert(gate.sizes() == outGrad.sizes());
+    assert(gate.sizes() == gateGradOut.sizes());
+    assert(gate.sizes() == valueGradOut.sizes());
+
+    const dim3 threads(64, 1, 1);
+    const dim3 blocks(gate.size(0) / 64 + (gate.size(0) % 64 == 0 ? 0 : 1), 1, 1);
+
+    AT_DISPATCH_FLOATING_TYPES(
+        gate.scalar_type(),
+        "simple_linear_scan_backward",
+        ([&] { simple_linear_scan_backward_kernel<scalar_t><<<blocks, threads>>>(
+                   gate.packed_accessor32<scalar_t, 2>(),
+                   output.packed_accessor32<scalar_t, 2>(),
+                   outGrad.packed_accessor32<scalar_t, 2>(),
+                   gateGradOut.packed_accessor32<scalar_t, 2>(),
+                   valueGradOut.packed_accessor32<scalar_t, 2>()); }));
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
 {
     m.def("simple_linear_scan", &simple_linear_scan, "Inefficient linear scan");
     m.def("coalesced_linear_scan", &coalesced_linear_scan, "Linear scan with coalesced loads");
     m.def("blocked_linear_scan", &blocked_linear_scan, "Linear scan with block-level parallelism");
+    m.def("simple_linear_scan_backward", &simple_linear_scan_backward, "Inefficient linear scan");
 }

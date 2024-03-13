@@ -8,7 +8,7 @@ if torch.cuda.is_available():
         CUDAExtension(
             "scanscam_cuda",
             [
-                "src/linear.cu",
+                "src/scanscam_cuda.cu",
             ],
         )
     )

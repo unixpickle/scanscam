@@ -25,7 +25,7 @@ def preprocess_scan_args(fn: ScanFn) -> ScanFn:
     return new_fn
 
 
-def preprocess_backward_scan_args(fn: ScanFn) -> ScanFn:
+def preprocess_backward_scan_args(fn: ReverseScanFn) -> ReverseScanFn:
     """
     Decorator to flatten the batch dimensions of arguments passed to a scan
     backward pass implementation.
