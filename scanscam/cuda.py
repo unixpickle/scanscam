@@ -48,3 +48,16 @@ def simple_linear_scan_backward(
     out_b = torch.empty_like(x)
     scanscam_cuda.simple_linear_scan_backward(x, y, z, out_a, out_b)
     return out_a, out_b
+
+
+@preprocess_backward_scan_args
+def blocked_linear_scan_backward(
+    x: torch.Tensor, y: torch.Tensor, z: torch.Tensor
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    x = x.contiguous()
+    y = y.contiguous()
+    z = z.contiguous()
+    out_a = torch.empty_like(x)
+    out_b = torch.empty_like(x)
+    scanscam_cuda.blocked_linear_scan_backward(x, y, z, out_a, out_b)
+    return out_a, out_b
