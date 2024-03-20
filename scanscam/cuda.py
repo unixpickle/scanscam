@@ -6,8 +6,11 @@ from scanscam.decorator import preprocess_backward_scan_args, preprocess_scan_ar
 
 try:
     import scanscam_cuda
+
+    has_cuda_ops = True
 except ModuleNotFoundError:
     scanscam_cuda = None
+    has_cuda_ops = False
 
 
 @preprocess_scan_args
