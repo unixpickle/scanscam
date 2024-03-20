@@ -1,14 +1,23 @@
 import torch
 from setuptools import setup
-from torch.utils.cpp_extension import BuildExtension, CUDAExtension
+from torch.utils.cpp_extension import BuildExtension, CppExtension, CUDAExtension
 
 ext_modules = []
 if torch.cuda.is_available():
     ext_modules.append(
         CUDAExtension(
-            "scanscam_cuda",
+            "scanscam_ext",
             [
                 "src/scanscam_cuda.cu",
+            ],
+        )
+    )
+else:
+    ext_modules.append(
+        CppExtension(
+            "scanscam_ext",
+            [
+                "src/scanscam_cpu.cpp",
             ],
         )
     )

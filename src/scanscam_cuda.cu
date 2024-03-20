@@ -1,6 +1,7 @@
+#include "scanscam_cpu.hpp"
 #include <torch/extension.h>
 
-#define CHECK_CUDA(x) AT_ASSERTM(x.type().is_cuda(), #x " must be a CUDA tensor")
+#define CHECK_CUDA(x) AT_ASSERTM(x.device().type().is_cuda(), #x " must be a CUDA tensor")
 #define CHECK_CONTIGUOUS(x) AT_ASSERTM(x.is_contiguous(), #x " must be contiguous")
 #define CHECK_INPUT(x) \
     CHECK_CUDA(x);     \
@@ -458,6 +459,7 @@ void blocked_linear_scan_backward(
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
 {
+    m.def("simple_linear_scan_cpu", &simple_linear_scan_cpu, "Single-threaded CPU linear scan");
     m.def("simple_linear_scan", &simple_linear_scan, "Inefficient linear scan");
     m.def("coalesced_linear_scan", &coalesced_linear_scan, "Linear scan with coalesced loads");
     m.def("blocked_linear_scan", &blocked_linear_scan, "Linear scan with block-level parallelism");

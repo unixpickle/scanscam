@@ -5,11 +5,11 @@ import torch
 from scanscam.decorator import preprocess_backward_scan_args, preprocess_scan_args
 
 try:
-    import scanscam_cuda
+    import scanscam_ext
 
-    has_cuda_ops = True
-except ModuleNotFoundError:
-    scanscam_cuda = None
+    has_cuda_ops = hasattr(scanscam_ext, "simple_linear_scan")
+except ImportError:
+    scanscam_ext = None
     has_cuda_ops = False
 
 
@@ -18,7 +18,7 @@ def simple_linear_scan_forward(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor
     x = x.contiguous()
     y = y.contiguous()
     out = torch.empty_like(x)
-    scanscam_cuda.simple_linear_scan(x, y, out)
+    scanscam_ext.simple_linear_scan(x, y, out)
     return out
 
 
@@ -27,7 +27,7 @@ def coalesced_linear_scan_forward(x: torch.Tensor, y: torch.Tensor) -> torch.Ten
     x = x.contiguous()
     y = y.contiguous()
     out = torch.empty_like(x)
-    scanscam_cuda.coalesced_linear_scan(x, y, out)
+    scanscam_ext.coalesced_linear_scan(x, y, out)
     return out
 
 
@@ -36,7 +36,7 @@ def blocked_linear_scan_forward(x: torch.Tensor, y: torch.Tensor) -> torch.Tenso
     x = x.contiguous()
     y = y.contiguous()
     out = torch.empty_like(x)
-    scanscam_cuda.blocked_linear_scan(x, y, out)
+    scanscam_ext.blocked_linear_scan(x, y, out)
     return out
 
 
@@ -49,7 +49,7 @@ def simple_linear_scan_backward(
     z = z.contiguous()
     out_a = torch.empty_like(x)
     out_b = torch.empty_like(x)
-    scanscam_cuda.simple_linear_scan_backward(x, y, z, out_a, out_b)
+    scanscam_ext.simple_linear_scan_backward(x, y, z, out_a, out_b)
     return out_a, out_b
 
 
@@ -62,5 +62,5 @@ def blocked_linear_scan_backward(
     z = z.contiguous()
     out_a = torch.empty_like(x)
     out_b = torch.empty_like(x)
-    scanscam_cuda.blocked_linear_scan_backward(x, y, z, out_a, out_b)
+    scanscam_ext.blocked_linear_scan_backward(x, y, z, out_a, out_b)
     return out_a, out_b
