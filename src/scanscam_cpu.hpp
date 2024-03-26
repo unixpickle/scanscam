@@ -70,8 +70,8 @@ void simple_linear_scan_backward_cpu_kernel(
             }
             dOutput += outGrad[i * innerSize + j];
             scalar_t thisGate = gate[i * innerSize + j];
-            valueGradOut[i * innerSize + i] = dOutput;
-            gateGradOut[i * innerSize + i] = dOutput * prevOutput;
+            valueGradOut[i * innerSize + j] = dOutput;
+            gateGradOut[i * innerSize + j] = dOutput * prevOutput;
             dOutput *= thisGate;
         }
     }

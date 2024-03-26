@@ -2,12 +2,8 @@ from typing import Any, Tuple
 
 import torch
 
+from . import cpu, cuda
 from .baseline import naive_linear_scan_backward, naive_linear_scan_forward
-from .cuda import (
-    blocked_linear_scan_backward,
-    blocked_linear_scan_forward,
-    has_cuda_ops,
-)
 
 
 def scan(gate: torch.Tensor, value: torch.Tensor) -> torch.Tensor:
@@ -24,8 +20,10 @@ def scan(gate: torch.Tensor, value: torch.Tensor) -> torch.Tensor:
 class Scan(torch.autograd.Function):
     @staticmethod
     def forward(ctx: Any, gate: torch.Tensor, value: torch.Tensor) -> torch.Tensor:
-        if gate.device.type == "cuda" and has_cuda_ops:
-            output = blocked_linear_scan_forward(gate, value)
+        if gate.device.type == "cuda" and cuda.has_cuda_ops:
+            output = cuda.blocked_linear_scan_forward(gate, value)
+        elif gate.device.type == "cpu" and cpu.has_cpu_ops:
+            output = cpu.simple_linear_scan_forward(gate, value)
         else:
             output = naive_linear_scan_forward(gate, value)
         ctx.save_for_backward(gate, output)
@@ -36,7 +34,9 @@ class Scan(torch.autograd.Function):
         ctx: Any, output_grad: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         gate, output = ctx.saved_tensors
-        if output_grad.device.type == "cuda" and has_cuda_ops:
-            return blocked_linear_scan_backward(gate, output, output_grad)
+        if output_grad.device.type == "cuda" and cuda.has_cuda_ops:
+            return cuda.blocked_linear_scan_backward(gate, output, output_grad)
+        elif gate.device.type == "cpu" and cpu.has_cpu_ops:
+            output = cpu.simple_linear_scan_backward(gate, output, output_grad)
         else:
             return naive_linear_scan_backward(gate, output, output_grad)
