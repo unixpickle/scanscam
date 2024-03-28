@@ -11,6 +11,7 @@ from scanscam.cuda import (
     coalesced_linear_scan_forward,
     simple_linear_scan_backward,
     simple_linear_scan_forward,
+    transposed_linear_scan_forward,
 )
 
 
@@ -125,6 +126,21 @@ def test_blocked_linear_scan_backward(shape: Sequence[int], permute: bool):
 
 
 @pytest.mark.parametrize(
+    "shape,channels_per_block",
+    itertools.product(
+        [(8, 4096, 512), (512, 4096, 8), (3, 107, 197), (3, 293, 283), (5, 6113, 107)],
+        [1, 8, 32],
+    ),
+)
+def test_transposed_linear_scan(shape: Sequence[int], channels_per_block: int):
+    x = torch.randn(*shape, device="cuda")
+    y = torch.randn(*shape, device="cuda")
+    expected = naive_linear_scan_forward(x.mT, y.mT).mT
+    actual = transposed_linear_scan_forward(x, y, channels_per_block)
+    assert torch.allclose(actual, expected, atol=1e-4), f"{actual=} {expected=}"
+
+
+@pytest.mark.parametrize(
     "shape",
     [(8, 256, 4096), (8, 256, 32), (256, 4096), (16384, 4096)],
 )
@@ -201,6 +217,27 @@ def test_blocked_linear_scan_backward_time(benchmark, shape):
 
     def fn():
         blocked_linear_scan_backward(x, y, z)
+        torch.cuda.synchronize()
+
+    benchmark(fn)
+
+
+@pytest.mark.parametrize(
+    "shape,channels_per_block",
+    itertools.product(
+        [(8, 4096, 512)],
+        [1, 2, 4, 8, 16, 32],
+    ),
+)
+def test_transposed_linear_scan_time(
+    benchmark, shape: Sequence[int], channels_per_block: int
+):
+    x = torch.randn(*shape, device="cuda")
+    y = torch.randn(*shape, device="cuda")
+    torch.cuda.synchronize()
+
+    def fn():
+        transposed_linear_scan_forward(x, y, channels_per_block)
         torch.cuda.synchronize()
 
     benchmark(fn)
