@@ -76,3 +76,20 @@ def transposed_linear_scan_forward(
     out = torch.empty_like(x)
     scanscam_ext.transposed_linear_scan(x, y, out, channels_per_block)
     return out
+
+
+def transposed_linear_scan_backward(
+    x: torch.Tensor, y: torch.Tensor, z: torch.Tensor, channels_per_block: int
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    assert x.shape == y.shape
+    assert x.shape == z.shape
+    assert len(x.shape) == 3
+    assert x.is_contiguous()
+    assert y.is_contiguous()
+    assert z.is_contiguous()
+    out_a = torch.empty_like(x)
+    out_b = torch.empty_like(x)
+    scanscam_ext.transposed_linear_scan_backward(
+        x, y, z, out_a, out_b, channels_per_block
+    )
+    return out_a, out_b

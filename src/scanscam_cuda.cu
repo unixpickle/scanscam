@@ -581,6 +581,147 @@ void transposed_linear_scan(
                    channelsPerBlock); }));
 }
 
+template <typename scalar_t>
+__global__ void __launch_bounds__(1024, 1) transposed_linear_scan_backward_kernel(
+    const torch::PackedTensorAccessor32<scalar_t, 3> gate,
+    const torch::PackedTensorAccessor32<scalar_t, 3> output,
+    const torch::PackedTensorAccessor32<scalar_t, 3> outGrad,
+    torch::PackedTensorAccessor32<scalar_t, 3> gateGradOut,
+    torch::PackedTensorAccessor32<scalar_t, 3> valueGradOut,
+    uint channelsPerBlock)
+{
+    __shared__ scalar_t sharedAcc[(32 + 1) * 32];
+    __shared__ scalar_t sharedValue[(32 + 1) * 32];
+    __shared__ scalar_t prevValue[32];
+
+    const uint batchSize = gate.size(0);
+    const uint seqLen = gate.size(1);
+    const uint numChannels = gate.size(2);
+
+    // Sizes dependent on how we will coalesce loads
+    const uint chunkSize = 1024 / channelsPerBlock;
+    const uint blocksPerBatchElem = ceil_div(numChannels, channelsPerBlock);
+    const uint batchIdx = blockIdx.x / blocksPerBatchElem;
+    const uint startChannel = (blockIdx.x % blocksPerBatchElem) * channelsPerBlock;
+
+    // Indices for loading into shared memory.
+    const uint loadChannel = startChannel + (threadIdx.x % channelsPerBlock);
+    const uint loadSeqIdx = threadIdx.x / channelsPerBlock;
+    const uint storeOffset = shifted_shared_index(threadIdx.x);
+
+    // Indices for gathering our local chunk.
+    const uint chunkIndex = threadIdx.x / chunkSize;
+    const uint indexInChunk = threadIdx.x % chunkSize;
+    const uint loadIndex = shifted_shared_index(chunkIndex + indexInChunk * channelsPerBlock);
+
+    for (uint seqStart = 0; seqStart < seqLen; seqStart += chunkSize) {
+        // Don't overwrite values from last iteration.
+        __syncthreads();
+
+        // Load global memory into shared memory.
+        scalar_t g = 0.0;
+        scalar_t v = 0.0;
+        if (loadChannel < numChannels) {
+            if (seqStart + loadSeqIdx <= seqLen && seqStart + loadSeqIdx > 0) {
+                g = gate[batchIdx][seqLen - (seqStart + loadSeqIdx)][loadChannel];
+            }
+            if (seqStart + loadSeqIdx < seqLen) {
+                v = outGrad[batchIdx][seqLen - (seqStart + loadSeqIdx + 1)][loadChannel];
+            }
+        }
+
+        sharedAcc[storeOffset] = g;
+        sharedValue[storeOffset] = v;
+        __syncthreads();
+
+        // Reduce across each chunk, using a subset of the total
+        // shared memory per chunk.
+        scalar_t totalValue = sharedValue[loadIndex];
+        scalar_t totalAcc = sharedAcc[loadIndex];
+        if (seqStart > 0) {
+            if (indexInChunk == 0) {
+                totalValue += totalAcc * prevValue[chunkIndex];
+                sharedValue[loadIndex] = totalValue;
+            }
+            __syncthreads();
+        }
+        for (uint offset = 1; offset < chunkSize; offset *= 2) {
+            __syncthreads();
+            scalar_t prevValue = 0;
+            scalar_t prevAcc = 1;
+            if (offset <= indexInChunk) {
+                const uint prevIndex = shifted_shared_index(chunkIndex + (indexInChunk - offset) * channelsPerBlock);
+                prevValue = sharedValue[prevIndex];
+                prevAcc = sharedAcc[prevIndex];
+            }
+            __syncthreads();
+            totalValue += totalAcc * prevValue;
+            totalAcc *= prevAcc;
+            sharedValue[loadIndex] = totalValue;
+            sharedAcc[loadIndex] = totalAcc;
+        }
+        if (indexInChunk == chunkSize - 1) {
+            prevValue[chunkIndex] = totalValue;
+        }
+
+        __syncthreads();
+        // Use sharedAcc to load the output from the forward pass.
+        scalar_t o = 0.0;
+        if (loadChannel < numChannels) {
+            if (seqStart + loadSeqIdx + 1 < seqLen) {
+                o = output[batchIdx][seqLen - (seqStart + loadSeqIdx + 2)][loadChannel];
+            }
+        }
+        sharedAcc[storeOffset] = o;
+        __syncthreads();
+
+        if (loadChannel < numChannels && seqStart + loadSeqIdx < seqLen) {
+            scalar_t x = sharedValue[storeOffset];
+            valueGradOut[batchIdx][seqLen - (seqStart + loadSeqIdx + 1)][loadChannel] = x;
+            x *= sharedAcc[storeOffset];
+            gateGradOut[batchIdx][seqLen - (seqStart + loadSeqIdx + 1)][loadChannel] = x;
+        }
+    }
+}
+
+void transposed_linear_scan_backward(
+    torch::Tensor gate,
+    torch::Tensor output,
+    torch::Tensor outGrad,
+    // Writable output tensors:
+    torch::Tensor gateGradOut,
+    torch::Tensor valueGradOut,
+    // Kernel configuration
+    int channelsPerBlock)
+{
+    CHECK_INPUT_CUDA(gate);
+    CHECK_INPUT_CUDA(output);
+    CHECK_INPUT_CUDA(outGrad);
+    CHECK_INPUT_CUDA(gateGradOut);
+    CHECK_INPUT_CUDA(valueGradOut);
+    assert(gate.sizes() == output.sizes());
+    assert(gate.sizes() == outGrad.sizes());
+    assert(gate.sizes() == gateGradOut.sizes());
+    assert(gate.sizes() == valueGradOut.sizes());
+    assert(channelsPerBlock == 1 || channelsPerBlock == 2 || channelsPerBlock == 4 || channelsPerBlock == 8 || channelsPerBlock == 16 || channelsPerBlock == 32);
+
+    const uint blocksPerBatchElem = ceil_div(gate.size(2), channelsPerBlock);
+
+    const dim3 threads(1024, 1, 1);
+    const dim3 blocks(gate.size(0) * blocksPerBatchElem, 1, 1);
+
+    AT_DISPATCH_FLOATING_TYPES(
+        gate.scalar_type(),
+        "transposed_linear_scan_backward",
+        ([&] { transposed_linear_scan_backward_kernel<scalar_t><<<blocks, threads>>>(
+                   gate.packed_accessor32<scalar_t, 3>(),
+                   output.packed_accessor32<scalar_t, 3>(),
+                   outGrad.packed_accessor32<scalar_t, 3>(),
+                   gateGradOut.packed_accessor32<scalar_t, 3>(),
+                   valueGradOut.packed_accessor32<scalar_t, 3>(),
+                   channelsPerBlock); }));
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
 {
     m.def("simple_linear_scan_cpu", &simple_linear_scan_cpu, "Single-threaded CPU linear scan");
@@ -592,4 +733,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
     m.def("simple_linear_scan_backward", &simple_linear_scan_backward, "Inefficient linear scan");
     m.def("blocked_linear_scan_backward", &blocked_linear_scan_backward, "Reverse scan with block-level parallelism");
     m.def("transposed_linear_scan", &transposed_linear_scan, "Scan for NTC instead of NCT");
+    m.def("transposed_linear_scan_backward", &transposed_linear_scan_backward, "Scan backward for NTC instead of NCT");
 }
