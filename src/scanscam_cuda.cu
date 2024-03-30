@@ -7,6 +7,17 @@
     CHECK_CUDA(x);          \
     CHECK_CONTIGUOUS(x);
 
+__device__ uint shifted_shared_index(uint idx)
+{
+    return idx + idx / 32;
+}
+
+template <typename T, typename T1>
+__device__ __host__ T ceil_div(T num, T1 denom)
+{
+    return num / denom + (num % denom == 0 ? 0 : 1);
+}
+
 template <typename scalar_t>
 __global__ void __launch_bounds__(64, 1) simple_linear_scan_kernel(
     const torch::PackedTensorAccessor32<scalar_t, 2> gate,
@@ -36,7 +47,7 @@ void simple_linear_scan(
     assert(gate.sizes() == output.sizes());
 
     const dim3 threads(64, 1, 1);
-    const dim3 blocks(gate.size(0) / 64 + (gate.size(0) % 64 == 0 ? 0 : 1), 1, 1);
+    const dim3 blocks(ceil_div(gate.size(0), 64), 1, 1);
 
     AT_DISPATCH_FLOATING_TYPES(
         gate.scalar_type(),
@@ -119,7 +130,7 @@ void coalesced_linear_scan(
     assert(gate.sizes() == output.sizes());
 
     const dim3 threads(64, 1, 1);
-    const dim3 blocks(gate.size(0) / 64 + (gate.size(0) % 64 == 0 ? 0 : 1), 1, 1);
+    const dim3 blocks(ceil_div(gate.size(0), 64), 1, 1);
 
     AT_DISPATCH_FLOATING_TYPES(
         gate.scalar_type(),
@@ -339,7 +350,7 @@ void simple_linear_scan_backward(
     assert(gate.sizes() == valueGradOut.sizes());
 
     const dim3 threads(64, 1, 1);
-    const dim3 blocks(gate.size(0) / 64 + (gate.size(0) % 64 == 0 ? 0 : 1), 1, 1);
+    const dim3 blocks(ceil_div(gate.size(0), 64), 1, 1);
 
     AT_DISPATCH_FLOATING_TYPES(
         gate.scalar_type(),
@@ -457,16 +468,6 @@ void blocked_linear_scan_backward(
     }
 }
 
-__device__ uint shiftedSharedIndex(uint idx)
-{
-    return idx + idx / 32;
-}
-
-__device__ __host__ uint ceilDiv(uint num, uint denom)
-{
-    return num / denom + (num % denom == 0 ? 0 : 1);
-}
-
 template <typename scalar_t>
 __global__ void __launch_bounds__(1024, 1) transposed_linear_scan_kernel(
     const torch::PackedTensorAccessor32<scalar_t, 3> gate,
@@ -484,19 +485,19 @@ __global__ void __launch_bounds__(1024, 1) transposed_linear_scan_kernel(
 
     // Sizes dependent on how we will coalesce loads
     const uint chunkSize = 1024 / channelsPerBlock;
-    const uint blocksPerBatchElem = ceilDiv(numChannels, channelsPerBlock);
+    const uint blocksPerBatchElem = ceil_div(numChannels, channelsPerBlock);
     const uint batchIdx = blockIdx.x / blocksPerBatchElem;
     const uint startChannel = (blockIdx.x % blocksPerBatchElem) * channelsPerBlock;
 
     // Indices for loading into shared memory.
     const uint loadChannel = startChannel + (threadIdx.x % channelsPerBlock);
     const uint loadSeqIdx = threadIdx.x / channelsPerBlock;
-    const uint storeOffset = shiftedSharedIndex(threadIdx.x);
+    const uint storeOffset = shifted_shared_index(threadIdx.x);
 
     // Indices for gathering our local chunk.
     const uint chunkIndex = threadIdx.x / chunkSize;
     const uint indexInChunk = threadIdx.x % chunkSize;
-    const uint loadIndex = shiftedSharedIndex(chunkIndex + indexInChunk * channelsPerBlock);
+    const uint loadIndex = shifted_shared_index(chunkIndex + indexInChunk * channelsPerBlock);
 
     for (uint seqStart = 0; seqStart < seqLen; seqStart += chunkSize) {
         // Don't overwrite values from last iteration.
@@ -530,7 +531,7 @@ __global__ void __launch_bounds__(1024, 1) transposed_linear_scan_kernel(
             scalar_t prevValue = 0;
             scalar_t prevAcc = 1;
             if (offset <= indexInChunk) {
-                const uint prevIndex = shiftedSharedIndex(chunkIndex + (indexInChunk - offset) * channelsPerBlock);
+                const uint prevIndex = shifted_shared_index(chunkIndex + (indexInChunk - offset) * channelsPerBlock);
                 prevValue = sharedValue[prevIndex];
                 prevAcc = sharedAcc[prevIndex];
             }
@@ -565,7 +566,7 @@ void transposed_linear_scan(
     assert(gate.sizes() == output.sizes());
     assert(channelsPerBlock == 1 || channelsPerBlock == 2 || channelsPerBlock == 4 || channelsPerBlock == 8 || channelsPerBlock == 16 || channelsPerBlock == 32);
 
-    const uint blocksPerBatchElem = ceilDiv(gate.size(2), channelsPerBlock);
+    const uint blocksPerBatchElem = ceil_div(gate.size(2), channelsPerBlock);
 
     const dim3 threads(1024, 1, 1);
     const dim3 blocks(gate.size(0) * blocksPerBatchElem, 1, 1);
