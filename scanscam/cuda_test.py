@@ -286,3 +286,23 @@ def test_transposed_linear_scan_backward_time(
         torch.cuda.synchronize()
 
     benchmark(fn)
+
+
+@pytest.mark.parametrize("naive", [False, True])
+def test_transposed_linear_scan_fwd_bwd_time(benchmark, naive: bool):
+    x = torch.randn(8, 4096, 512, device="cuda")
+    y = torch.randn(8, 4096, 512, device="cuda")
+    z = torch.randn(8, 4096, 512, device="cuda")
+    channels_per_block = 32
+    torch.cuda.synchronize()
+
+    def fn():
+        if naive:
+            out = blocked_linear_scan_forward(x.mT, y.mT).mT
+            g1, g2 = blocked_linear_scan_backward(x.mT, out.mT, z.mT)
+        else:
+            out = transposed_linear_scan_forward(x, y, channels_per_block)
+            g1, g2 = transposed_linear_scan_backward(x, out, z, channels_per_block)
+        (g1 + g2).sum().item()  # force usage
+
+    benchmark(fn)
